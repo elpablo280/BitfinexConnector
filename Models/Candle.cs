@@ -1,4 +1,4 @@
-﻿namespace TestHQ
+﻿namespace BitfinexConnector
 {
     public class Candle
     {

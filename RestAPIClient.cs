@@ -3,46 +3,75 @@
     using System;
     using System.Net.Http;
     using System.Threading.Tasks;
+    using BitfinexConnector.Interface;
     using Newtonsoft.Json;
-    using TestHQ;
+    using Newtonsoft.Json.Linq;
 
-    public class RestAPIClient
+    public class RestApiClient : IRestApi
     {
         private readonly HttpClient _httpClient;
         private const string BaseUrl = "https://api.bitfinex.com/v2/";
 
-        public RestAPIClient()
+        public RestApiClient()
         {
             _httpClient = new HttpClient { BaseAddress = new Uri(BaseUrl) };
         }
 
-        public async Task<IEnumerable<Trade>> GetTradesAsync(string pair, int maxCount)
+        public async Task<IEnumerable<Trade>> GetNewTradesAsync(string pair, int maxCount)
         {
             var response = await _httpClient.GetAsync($"trades/{pair}/hist?limit={maxCount}");
             response.EnsureSuccessStatusCode();
             var json = await response.Content.ReadAsStringAsync();
-            return JsonConvert.DeserializeObject<List<Trade>>(json);
+            var trades = ParseTrades(json);
+            return trades;
         }
 
-        public async Task<IEnumerable<Candle>> GetCandlesAsync(string pair, int periodInSec, DateTimeOffset? from, DateTimeOffset? to, long? count)
+        public async Task<IEnumerable<Candle>> GetCandleSeriesAsync(string pair, int periodInSec, DateTimeOffset? from, DateTimeOffset? to = null, long? count = 0)
         {
-            var query = $"candles/trade:{periodInSec}:{pair}/hist?limit={count}";
-            if (from.HasValue) query += $"&start={from.Value.ToUnixTimeSeconds()}";
-            if (to.HasValue) query += $"&end={to.Value.ToUnixTimeSeconds()}";
-
-            var response = await _httpClient.GetAsync(query);
+            var url = $"candles/trade:{periodInSec}:{pair}/hist?limit={count}&start={from?.ToUnixTimeSeconds()}&end={to?.ToUnixTimeSeconds()}";
+            var response = await _httpClient.GetAsync(url);
             response.EnsureSuccessStatusCode();
             var json = await response.Content.ReadAsStringAsync();
-            return JsonConvert.DeserializeObject<List<Candle>>(json);
+            var candles = ParseCandles(json);
+            return candles;
         }
 
-        //public async Task<Ticker> GetTickerAsync(string pair)
-        //{
-        //    var response = await _httpClient.GetAsync($"ticker/{pair}");
-        //    response.EnsureSuccessStatusCode();
-        //    var json = await response.Content.ReadAsStringAsync();
-        //    // Десериализация JSON в объект Ticker
-        //    return JsonConvert.DeserializeObject<Ticker>(json);
-        //}
+        private IEnumerable<Trade> ParseTrades(string json)
+        {
+            var trades = new List<Trade>();
+            var array = JArray.Parse(json);
+            foreach (var item in array)
+            {
+                var trade = new Trade
+                {
+                    Id = item[0].ToString(),
+                    Time = DateTimeOffset.FromUnixTimeSeconds(long.Parse(item[1].ToString())),
+                    Amount = decimal.Parse(item[2].ToString()),
+                    Price = decimal.Parse(item[3].ToString())
+                };
+                trades.Add(trade);
+            }
+            return trades;
+        }
+
+        private IEnumerable<Candle> ParseCandles(string json)
+        {
+            var candles = new List<Candle>();
+            var array = JArray.Parse(json);
+            foreach (var item in array)
+            {
+                var candle = new Candle
+                {
+                    OpenTime = DateTimeOffset.FromUnixTimeSeconds(long.Parse(item[0].ToString())),
+                    OpenPrice = decimal.Parse(item[1].ToString()),
+                    ClosePrice = decimal.Parse(item[2].ToString()),
+                    HighPrice = decimal.Parse(item[3].ToString()),
+                    LowPrice = decimal.Parse(item[4].ToString()),
+                    TotalVolume = decimal.Parse(item[5].ToString())
+                };
+                candles.Add(candle);
+            }
+            return candles;
+        }
     }
 }
