@@ -1,4 +1,4 @@
-﻿namespace BitfinexConnector
+﻿namespace BitfinexConnector.Clients
 {
     using System;
     using System.Net.Http;
@@ -28,7 +28,8 @@
 
         public async Task<IEnumerable<Candle>> GetCandleSeriesAsync(string pair, int periodInSec, DateTimeOffset? from, DateTimeOffset? to = null, long? count = 0)
         {
-            var url = $"candles/trade:{periodInSec}:{pair}/hist?limit={count}&start={from?.ToUnixTimeSeconds()}&end={to?.ToUnixTimeSeconds()}";
+            var url = $"candles/trade:30m:tBTCUSD/hist";       // todo
+            //var url = $"candles/trade:{periodInSec}:{pair}/hist?limit={count}&start={from?.ToUnixTimeSeconds()}&end={to?.ToUnixTimeSeconds()}";
             var response = await _httpClient.GetAsync(url);
             response.EnsureSuccessStatusCode();
             var json = await response.Content.ReadAsStringAsync();
@@ -45,7 +46,7 @@
                 var trade = new Trade
                 {
                     Id = item[0].ToString(),
-                    Time = DateTimeOffset.FromUnixTimeSeconds(long.Parse(item[1].ToString())),
+                    Time = DateTimeOffset.FromUnixTimeSeconds(long.Parse(item[1].ToString()) / 1000),   // делим на тысячу, т.к. возвращается из апи в миллисекундах
                     Amount = decimal.Parse(item[2].ToString()),
                     Price = decimal.Parse(item[3].ToString())
                 };
@@ -62,7 +63,7 @@
             {
                 var candle = new Candle
                 {
-                    OpenTime = DateTimeOffset.FromUnixTimeSeconds(long.Parse(item[0].ToString())),
+                    OpenTime = DateTimeOffset.FromUnixTimeSeconds(long.Parse(item[0].ToString()) / 1000),   // делим на тысячу, т.к. возвращается из апи в миллисекундах
                     OpenPrice = decimal.Parse(item[1].ToString()),
                     ClosePrice = decimal.Parse(item[2].ToString()),
                     HighPrice = decimal.Parse(item[3].ToString()),

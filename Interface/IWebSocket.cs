@@ -2,7 +2,7 @@
 {
     // разбил изначальный интерфейс на 2 + поменял void на Task
 
-    interface IWebSocket
+    public interface IWebSocket
     {
         event Action<Trade> NewBuyTrade;
         event Action<Trade> NewSellTrade;
