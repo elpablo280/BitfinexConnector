@@ -1,6 +1,7 @@
 ﻿namespace BitfinexConnector.Clients
 {
     using System;
+    using System.Globalization;
     using System.Net.Http;
     using System.Threading.Tasks;
     using BitfinexConnector.Interface;
@@ -26,10 +27,13 @@
             return trades;
         }
 
-        public async Task<IEnumerable<Candle>> GetCandleSeriesAsync(string pair, int periodInSec, DateTimeOffset? from, DateTimeOffset? to = null, long? count = 0)
+        public async Task<IEnumerable<Candle>> GetCandleSeriesAsync(string pair, string period, DateTimeOffset? from, DateTimeOffset? to = null, long? count = 0)
         {
-            var url = $"candles/trade:30m:tBTCUSD/hist";       // todo
-            //var url = $"candles/trade:{periodInSec}:{pair}/hist?limit={count}&start={from?.ToUnixTimeSeconds()}&end={to?.ToUnixTimeSeconds()}";
+            string url = $"candles/trade:{period}:{pair}/hist";
+            if (to is not null)
+            {
+                url += $"?limit={count}&start={from?.ToUnixTimeSeconds()}&end={to?.ToUnixTimeSeconds()}";
+            }
             var response = await _httpClient.GetAsync(url);
             response.EnsureSuccessStatusCode();
             var json = await response.Content.ReadAsStringAsync();
@@ -43,14 +47,19 @@
             var array = JArray.Parse(json);
             foreach (var item in array)
             {
-                var trade = new Trade
+                if (long.TryParse(item[1].ToString(), out long time) &&
+                    decimal.TryParse(item[2].ToString(), out decimal amount) &&
+                    decimal.TryParse(item[3].ToString(), out decimal price))
                 {
-                    Id = item[0].ToString(),
-                    Time = DateTimeOffset.FromUnixTimeSeconds(long.Parse(item[1].ToString()) / 1000),   // делим на тысячу, т.к. возвращается из апи в миллисекундах
-                    Amount = decimal.Parse(item[2].ToString()),
-                    Price = decimal.Parse(item[3].ToString())
-                };
-                trades.Add(trade);
+                    var trade = new Trade
+                    {
+                        Id = item[0].ToString(),
+                        Time = DateTimeOffset.FromUnixTimeSeconds(time / 1000),
+                        Amount = amount,
+                        Price = price
+                    };
+                    trades.Add(trade);
+                }
             }
             return trades;
         }
@@ -61,16 +70,24 @@
             var array = JArray.Parse(json);
             foreach (var item in array)
             {
-                var candle = new Candle
+                if (long.TryParse(item[0].ToString(), out long openTime) &&
+                    decimal.TryParse(item[1].ToString(), out decimal openPrice) &&
+                    decimal.TryParse(item[2].ToString(), out decimal closePrice) &&
+                    decimal.TryParse(item[3].ToString(), out decimal highPrice) &&
+                    decimal.TryParse(item[4].ToString(), out decimal lowPrice) &&
+                    decimal.TryParse(item[5].ToString(), out decimal totalVolume))
                 {
-                    OpenTime = DateTimeOffset.FromUnixTimeSeconds(long.Parse(item[0].ToString()) / 1000),   // делим на тысячу, т.к. возвращается из апи в миллисекундах
-                    OpenPrice = decimal.Parse(item[1].ToString()),
-                    ClosePrice = decimal.Parse(item[2].ToString()),
-                    HighPrice = decimal.Parse(item[3].ToString()),
-                    LowPrice = decimal.Parse(item[4].ToString()),
-                    TotalVolume = decimal.Parse(item[5].ToString())
-                };
-                candles.Add(candle);
+                    var candle = new Candle
+                    {
+                        OpenTime = DateTimeOffset.FromUnixTimeSeconds(openTime / 1000),
+                        OpenPrice = openPrice,
+                        ClosePrice = closePrice,
+                        HighPrice = highPrice,
+                        LowPrice = lowPrice,
+                        TotalVolume = totalVolume
+                    };
+                    candles.Add(candle);
+                }
             }
             return candles;
         }
