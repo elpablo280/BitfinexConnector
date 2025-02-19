@@ -1,110 +1,108 @@
-﻿using BitfinexConnector.Interface;
+﻿using BitfinexConnector;
 using Newtonsoft.Json.Linq;
-using WebSocket4Net;
-using WebSocket = WebSocket4Net.WebSocket;
+using Newtonsoft.Json;
+using System;
+using System.Net.WebSockets;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using BitfinexConnector.Interface;
 
-namespace BitfinexConnector.Clients
+public class WebSocketClient : IWebSocket
 {
-    public class WebSocketClient : IWebSocket
+    private readonly ClientWebSocket _webSocket;
+    private readonly Uri _uri = new Uri("wss://api.bitfinex.com/ws/2");
+
+    public event Action<Trade> NewBuyTrade;
+    public event Action<Trade> NewSellTrade;
+    public event Action<Candle> CandleSeriesProcessing;
+
+    public WebSocketClient()
     {
-        private WebSocket _webSocket;
-        private const string BaseUrl = "wss://api.bitfinex.com/ws/2";
+        _webSocket = new ClientWebSocket();
+        ConnectAsync();
+    }
 
-        public event Action<Trade> NewBuyTrade;
-        public event Action<Trade> NewSellTrade;
-        public event Action<Candle> CandleSeriesProcessing;
+    public async Task ConnectAsync()
+    {
+        await _webSocket.ConnectAsync(_uri, CancellationToken.None);
+        _ = ReceiveMessagesAsync();
+    }
 
-        public WebSocketClient()
+    private async Task SendMessageAsync(string message)
+    {
+        var bytes = Encoding.UTF8.GetBytes(message);
+        await _webSocket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
+    }
+
+    private async Task ReceiveMessagesAsync()
+    {
+        var buffer = new byte[1024 * 4];
+        while (_webSocket.State == WebSocketState.Open)
         {
-            _webSocket = new WebSocket(BaseUrl);
-            _webSocket.Opened += WebSocket_Opened;
-            _webSocket.MessageReceived += WebSocket_MessageReceived;
-            _webSocket.Open();
+            var result = await _webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+            var message = Encoding.UTF8.GetString(buffer, 0, result.Count);
+            HandleMessage(message);
         }
+    }
 
-        private void WebSocket_Opened(object sender, EventArgs e)
+    private void HandleMessage(string message)
+    {
+        var jsonObject = JObject.Parse(message);
+        if (jsonObject.ContainsKey("event"))
         {
-        }
-
-        private void WebSocket_MessageReceived(object sender, MessageReceivedEventArgs e)
-        {
-            var message = JArray.Parse(e.Message);
-            if (message.Count > 1 && message[1].Type == JTokenType.String)
+            var eventType = jsonObject["event"].ToString();
+            if (eventType == "te") // "te" - trade event
             {
-                var channel = message[1].ToString();
-                if (channel.Contains("trade"))
+                var tradeData = jsonObject[1]; // Данные о трейде находятся во втором элементе массива
+                var trade = JsonConvert.DeserializeObject<Trade>(tradeData.ToString());
+                if (trade is not null && trade.Amount > 0m)
                 {
-                    var trade = ParseTrade(message[2]);
-                    if (trade.Side == "buy")
-                    {
-                        NewBuyTrade?.Invoke(trade);
-                    }
-                    else
-                    {
-                        NewSellTrade?.Invoke(trade);
-                    }
+                    NewBuyTrade?.Invoke(trade);
                 }
-                else if (channel.Contains("candle"))
+                else if (trade is not null && trade.Amount < 0m)
                 {
-                    var candle = ParseCandle(message[2]);
-                    CandleSeriesProcessing?.Invoke(candle);
+                    NewSellTrade?.Invoke(trade);
                 }
             }
-        }
-
-        public Task SubscribeTradesAsync(string pair, int maxCount)
-        {
-            var message = new JArray { 0, "subscribe", "trades", $"t{pair}", maxCount };
-            _webSocket.Send(message.ToString());
-            return Task.CompletedTask;
-        }
-
-        public Task UnsubscribeTradesAsync(string pair)
-        {
-            var message = new JArray { 0, "unsubscribe", "trades", $"t{pair}" };
-            _webSocket.Send(message.ToString());
-            return Task.CompletedTask;
-        }
-
-        public Task SubscribeCandlesAsync(string pair, int periodInSec, DateTimeOffset? from = null, DateTimeOffset? to = null, long? count = 0)
-        {
-            var message = new JArray { 0, "subscribe", "candles", $"trade:{periodInSec}:t{pair}" };
-            _webSocket.Send(message.ToString());
-            return Task.CompletedTask;
-        }
-
-        public Task UnsubscribeCandlesAsync(string pair)
-        {
-            var message = new JArray { 0, "unsubscribe", "candles", $"trade:t{pair}" };
-            _webSocket.Send(message.ToString());
-            return Task.CompletedTask;
-        }
-
-        private Trade ParseTrade(JToken token)
-        {
-            var trade = new Trade
+            else if (eventType == "candle")
             {
-                Id = token[0].ToString(),
-                Time = DateTimeOffset.FromUnixTimeSeconds(long.Parse(token[1].ToString())),
-                Amount = decimal.Parse(token[2].ToString()),
-                Price = decimal.Parse(token[3].ToString()),
-                Side = token[4].ToString()
-            };
-            return trade;
+                var candleData = jsonObject[1]; // Данные о свече находятся во втором элементе массива
+                var candle = JsonConvert.DeserializeObject<Candle>(candleData.ToString());
+                CandleSeriesProcessing?.Invoke(candle);
+            }
         }
+    }
 
-        private Candle ParseCandle(JToken token)
+    public async Task SubscribeTradesAsync(string pair, int maxCount = 100)
+    {
+        var subscribeMessage = $"{{\"event\":\"subscribe\",\"channel\":\"trades\",\"symbol\":\"{pair}\",\"len\":\"{maxCount}\"}}";
+        await SendMessageAsync(subscribeMessage);
+    }
+
+    public async Task SubscribeCandlesAsync(string pair, string period, DateTimeOffset? from = null, DateTimeOffset? to = null, long? count = 0)
+    {
+        string subscribeMessage = string.Empty;
+        if (to is not null)
         {
-            var candle = new Candle
-            {
-                OpenTime = DateTimeOffset.FromUnixTimeSeconds(long.Parse(token[0].ToString())),
-                OpenPrice = decimal.Parse(token[1].ToString()),
-                ClosePrice = decimal.Parse(token[2].ToString()),
-                HighPrice = decimal.Parse(token[3].ToString()),
-                LowPrice = decimal.Parse(token[4].ToString()),
-                TotalVolume = decimal.Parse(token[5].ToString())
-            };
-            return candle;
+            subscribeMessage += $"{{\"event\":\"subscribe\",\"channel\":\"candles\",\"key\":\"trade:{period}:{pair}a{count}:p{from?.ToUnixTimeSeconds()}:p{to?.ToUnixTimeSeconds()}\"}}";
         }
+        else
+        {
+            subscribeMessage = $"{{\"event\":\"subscribe\",\"channel\":\"candles\",\"key\":\"trade:{period}:{pair}\"}}";
+        }
+        await SendMessageAsync(subscribeMessage);
+    }
+
+    public async Task UnsubscribeTradesAsync(string pair)
+    {
+        var unsubscribeMessage = $"{{\"event\":\"unsubscribe\",\"channel\":\"trades\",\"symbol\":\"{pair}\"}}";
+        await SendMessageAsync(unsubscribeMessage);
+    }
+
+    public async Task UnsubscribeCandlesAsync(string pair)
+    {
+        var unsubscribeMessage = $"{{\"event\":\"unsubscribe\",\"channel\":\"candles\",\"key\":\"trade:{pair}\"}}";
+        await SendMessageAsync(unsubscribeMessage);
     }
 }
